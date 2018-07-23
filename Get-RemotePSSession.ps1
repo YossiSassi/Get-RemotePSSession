@@ -1,4 +1,4 @@
-function Get-RemotePSSession
+function Global:Get-RemotePSSession
 {
 [CmdletBinding()]
     Param
