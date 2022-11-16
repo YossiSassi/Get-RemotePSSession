@@ -1,5 +1,7 @@
 function Global:Get-RemotePSSession
 {
+# v1.0.1 - added wincompat shell name to identify local PWSH runspaces
+# comments to yossis@protonmail.com
 [CmdletBinding()]
     Param
     (
@@ -31,6 +33,7 @@ public string IdleTime;
 public string ShellID;
 public string ConnectionURI;
 public bool UseSSL=false;
+public string Name;
             }}
 "@
     } else {
@@ -45,6 +48,7 @@ public string IdleTime;
 public string ShellID;
 public string ConnectionURI;
 public bool UseSSL=false;
+public string Name;
             }}
 "@
     }
@@ -64,14 +68,16 @@ foreach($session in $sessions)
             if ($ResolveClientHostname) {$obj = New-Object GetRemotePSSession.PSSession1} else {$obj = New-Object GetRemotePSSession.PSSession2}
             $obj.Owner = $session.owner
             $obj.ClientIP = $session.clientIp
-            if ($ResolveClientHostname) {
-            $obj.ClientHostname = [System.Net.Dns]::GetHostEntry($obj.ClientIP).HostName.ToUpper()
+	        if ($ResolveClientHostname) {
+                if ($obj.clientIP -eq "::1" -xor $obj.clientIP -eq "127.0.0.1") {$obj.ClientHostname = $ComputerName}
+                else {$obj.ClientHostname = [System.Net.Dns]::GetHostEntry($obj.ClientIP).HostName.ToUpper()}
             }
             $obj.SessionTime = [System.Xml.XmlConvert]::ToTimeSpan($session.shellRunTime).tostring()
             $obj.IdleTime = [System.Xml.XmlConvert]::ToTimeSpan($session.shellInactivity).tostring()
             $obj.ShellID = $session.shellid
             $obj.ConnectionURI = $uri
             $obj.UseSSL = $UseSSL
+	        $obj.Name = $session.Name
             $results += $obj
         }
       }
