@@ -1,90 +1,95 @@
-function Global:Get-RemotePSSession
-{
-# v1.0.1 - added wincompat shell name to identify local PWSH runspaces
-# comments to yossis@protonmail.com
-[CmdletBinding()]
-    Param
-    (
-     # Computer to query
-     [Parameter(Mandatory=$true,
-                ValueFromPipeline=$true,
-                Position=0)]
-                [string]$ComputerName, 
-     # use SSL
-     [switch]$UseSSL,
-     # Resolve IPs to hostnames
-     [switch]$ResolveClientHostname
-    )
- 
-    Begin
-    {
-        try{
-            if ($ResolveClientHostname)
-            {
-            Add-Type  @"
-namespace GetRemotePSSession{
-public class PSSession1
-            {
-public string Owner;
-public string ClientIP;
-public string ClientHostname;
-public string SessionTime;
-public string IdleTime;
-public string ShellID;
-public string ConnectionURI;
-public bool UseSSL=false;
-public string Name;
-            }}
-"@
-    } else {
-    Add-Type  @"
-namespace GetRemotePSSession{
-public class PSSession2
-            {
-                public string Owner;
-public string ClientIP;
-public string SessionTime;
-public string IdleTime;
-public string ShellID;
-public string ConnectionURI;
-public bool UseSSL=false;
-public string Name;
-            }}
-"@
-    }
-        }
-        catch{}
-        $results = @() 
-    }
-    Process
-    { 
-$Port = if ($UseSSL) {5986} else {5985}
-$URI = "http://$($Computername):$port/wsman"
-$sessions = Get-WSManInstance -ConnectionURI $URI shell -Enumerate
+<#
+Agentless, pure "living off the land" (No dependencies required, e.g. no ActiveDirectory Module needed or RSAT) for mapping user session in a 'Hacktive Directory' domain.
+Run w/account that has Local Admin on domain endpoints. relays on port 445 to be open on the endPoints (quser.exe tool is used).
 
-if ($sessions -ne $null) {
-foreach($session in $sessions)
-        {
-            if ($ResolveClientHostname) {$obj = New-Object GetRemotePSSession.PSSession1} else {$obj = New-Object GetRemotePSSession.PSSession2}
-            $obj.Owner = $session.owner
-            $obj.ClientIP = $session.clientIp
-	        if ($ResolveClientHostname) {
-                if ($obj.clientIP -eq "::1" -xor $obj.clientIP -eq "127.0.0.1") {$obj.ClientHostname = $ComputerName}
-                else {$obj.ClientHostname = [System.Net.Dns]::GetHostEntry($obj.ClientIP).HostName.ToUpper()}
-            }
-            $obj.SessionTime = [System.Xml.XmlConvert]::ToTimeSpan($session.shellRunTime).tostring()
-            $obj.IdleTime = [System.Xml.XmlConvert]::ToTimeSpan($session.shellInactivity).tostring()
-            $obj.ShellID = $session.shellid
-            $obj.ConnectionURI = $uri
-            $obj.UseSSL = $UseSSL
-	        $obj.Name = $session.Name
-            $results += $obj
-        }
-      }
-      else {Write-Host "No Remote PSSessions found on $computername on port $Port." -ForegroundColor Cyan}
+By default, tries to query all enabled computer accounts in the domain. Can also specify specific computer(s).
+
+Comments welcome to 1nTh35h311 (yossis@protonmail.com)
+Version: 1.0.3
+#>
+param (
+    [cmdletbinding()]
+    [parameter(mandatory=$false)]
+    [string[]]$ComputerName
+)
+
+$DomainName = ([adsi]'').name;
+$ReportFile = "$(Get-Location)\Sessions_$($DomainName)_$(Get-Date -Format ddMMyyyyHHmmss).csv";
+$CurrentDirectory = Get-Location;
+
+if (!$ComputerName)
+    {
+        Write-Host "Querying all enabled & accessible computer accounts in domain $DomainName... (Default)" -ForegroundColor Green;
+        # Get all Enabled computer accounts 
+        #$Computers = Get-ADComputer -Filter {Enabled -eq 'true'}
+        $Searcher = New-Object DirectoryServices.DirectorySearcher([ADSI]"");
+        $Searcher.Filter = "(&(objectClass=computer)(!userAccountControl:1.2.840.113556.1.4.803:=2))";
+        $Searcher.PageSize = 100000; # by default, 1000 are returned for adsiSearcher. this script will handle up to 100K acccounts.
+        $Computers = ($Searcher.Findall());
+        $HostsToQuery = $Computers.Properties.dnshostname;
+        $TotalCount = $HostsToQuery.Count;
     }
-    End
-    {        
-      $results
+else # specific computer(s) specified
+    {
+        Write-Host "Querying computers specified. " -NoNewline -ForegroundColor Yellow; Write-Host " Run without any parameters to query ALL computers in domain $DomainName." -ForegroundColor Green;
+        $HostsToQuery = $ComputerName;
+        $TotalCount = ($ComputerName | Measure-Object).Count
+    }
+
+# function to ensure port 445 is open on destination (quser, qwinsta etc relay on it - queries done over SMB)
+filter Invoke-PortPing {((New-Object System.Net.Sockets.TcpClient).ConnectAsync($_,445)).Wait(100)}
+#filter Invoke-Ping {(New-Object System.Net.NetworkInformation.Ping).Send($_,100)}
+
+# Set current location to the quser.exe tool
+Set-Location $env:windir\system32;
+
+$global:SessionList = @();
+$global:SessionList += 'COMPUTERNAME,USERNAME,SESSIONNAME,ID,STATE,IDLETIME,LOGONTIME';
+'COMPUTERNAME,USERNAME,SESSIONNAME,ID,STATE,IDLETIME,LOGONTIME' | Out-File $ReportFile;
+[int]$i = 1;
+
+# Get the current Error Action Preference
+$CurrentEAP = $ErrorActionPreference;
+# Set script not to alert for errors
+$ErrorActionPreference = "silentlycontinue";
+
+$HostsToQuery | Foreach {
+    $Computer = $_
+     Write-Host "Querying $Computer ($i out of $TotalCount)"
+
+     # Port-Ping the host first, to improve performance/shorten timeout
+     # NOTE: if no Firewall blocking SMB 445 on Endpoints, step can be skipped. simply remark it in the code if needed
+     if (($Computer | Invoke-PortPing) -eq "True") {
+            $QueryData = .\quser.exe /Server:$Computer;
+            if ($QueryData -notlike "No User exists for ") {
+                $TempData = ($QueryData).SubString(1) -replace '\s{2,}', ',';
+                $Lines = $TempData | select -skip 1 | foreach {if ($($_.split(",").count) -eq 5) { $_.Insert($($_.Indexof(",")),",")} else {$_}} | foreach { "$computer,$_"}
+                $Lines | foreach {Write-Host "$Computer logged in by $($_.split(",")[1]) (State: $($_.split(",")[4]))" -ForegroundColor Cyan}
+		        $global:SessionList += $Lines;
+                $Lines | Out-File $ReportFile -Append;
+                Clear-Variable QueryData, Tempdata, Lines; $i++
+            }
     }
 }
+
+# Set back error preference, as well as current directory from which the script was ran
+$ErrorActionPreference = $CurrentEAP;
+Set-Location $CurrentDirectory;
+
+Write-Host `nTotal of $global:SessionList.Count sessions found -ForegroundColor Green;
+Write-Host Report file saved to $ReportFile`n -ForegroundColor Gray;
+
+if ($global:SessionList.Count -ge 2) {
+# allow in memory query of the collected sessions info
+Do {
+    Write-Host "Type the username you wish to see the Session(s) for, or press ENTER to exit:" -ForegroundColor Yellow
+    $username = Read-Host
+    $global:SessionList | ConvertFrom-Csv | where username -eq $username
+    }
+    until ($username -eq '')
+}
+
+Write-Host Type '$global:SessionList' to see the full session list in memory, in CSV format -ForegroundColor Magenta;
+# NOTE: you can use this global variable to query sessions further and/or export them to other formats, e.g. 
+# To a grid: $global:SessionList | ConvertFrom-CSV | Out-GridView
+# or JSON: $global:SessionList | ConvertFrom-CSV | ConvertTo-Json | Out-File .\Sessions.json
