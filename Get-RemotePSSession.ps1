@@ -73,7 +73,7 @@ if (!$?) {
     Write-Warning "An error occured while trying to access $URI";
     $Error[0].exception;
     $ErrorActionPreference = $EAP;
-    exit
+    break
 }
 
 if ($sessions -ne $null) {
