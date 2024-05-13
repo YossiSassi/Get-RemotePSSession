@@ -1,5 +1,6 @@
 function Global:Get-RemotePSSession
 {
+# v1.0.2 - added error handling and better indication for access denied etc.
 # v1.0.1 - added wincompat shell name to identify local PWSH runspaces
 # comments to yossis@protonmail.com
 [CmdletBinding()]
@@ -58,9 +59,22 @@ public string Name;
     }
     Process
     { 
+
 $Port = if ($UseSSL) {5986} else {5985}
-$URI = "http://$($Computername):$port/wsman"
-$sessions = Get-WSManInstance -ConnectionURI $URI shell -Enumerate
+$URI = "http://$($Computername):$port/wsman";
+
+# enum sessions
+$EAP = $ErrorActionPreference;
+$ErrorActionPreference = "SilentlyContinue";
+$sessions = Get-WSManInstance -ConnectionURI $URI shell -Enumerate;
+
+# handle errors, abort if no access
+if (!$?) {
+    Write-Warning "An error occured while trying to access $URI";
+    $Error[0].exception;
+    $ErrorActionPreference = $EAP;
+    exit
+}
 
 if ($sessions -ne $null) {
 foreach($session in $sessions)
@@ -85,6 +99,7 @@ foreach($session in $sessions)
     }
     End
     {        
-      $results
+      $results;
+      $ErrorActionPreference = $EAP
     }
 }
