@@ -1,5 +1,6 @@
 function Global:Get-RemotePSSession
 {
+# v1.0.3 - added support for Computername parameter to query multiple hosts in one command run
 # v1.0.2 - added error handling and better indication for access denied etc.
 # v1.0.1 - added wincompat shell name to identify local PWSH runspaces
 # comments to yossis@protonmail.com
@@ -10,7 +11,7 @@ function Global:Get-RemotePSSession
      [Parameter(Mandatory=$true,
                 ValueFromPipeline=$true,
                 Position=0)]
-                [string]$ComputerName, 
+                [string[]]$ComputerName, 
      # use SSL
      [switch]$UseSSL,
      # Resolve IPs to hostnames
@@ -35,6 +36,7 @@ public string ShellID;
 public string ConnectionURI;
 public bool UseSSL=false;
 public string Name;
+public string RemoteComputer;
             }}
 "@
     } else {
@@ -50,6 +52,7 @@ public string ShellID;
 public string ConnectionURI;
 public bool UseSSL=false;
 public string Name;
+public string RemoteComputer;
             }}
 "@
     }
@@ -60,8 +63,13 @@ public string Name;
     Process
     { 
 
+# Set port
 $Port = if ($UseSSL) {5986} else {5985}
-$URI = "http://$($Computername):$port/wsman";
+$results = @();
+
+$ComputerName | ForEach-Object {
+$Computer = $_; 
+$URI = "http://$($Computer):$port/wsman";
 
 # enum sessions
 $EAP = $ErrorActionPreference;
@@ -83,7 +91,7 @@ foreach($session in $sessions)
             $obj.Owner = $session.owner
             $obj.ClientIP = $session.clientIp
 	        if ($ResolveClientHostname) {
-                if ($obj.clientIP -eq "::1" -xor $obj.clientIP -eq "127.0.0.1") {$obj.ClientHostname = $ComputerName}
+                if ($obj.clientIP -eq "::1" -xor $obj.clientIP -eq "127.0.0.1") {$obj.ClientHostname = $Computer}
                 else {$obj.ClientHostname = [System.Net.Dns]::GetHostEntry($obj.ClientIP).HostName.ToUpper()}
             }
             $obj.SessionTime = [System.Xml.XmlConvert]::ToTimeSpan($session.shellRunTime).tostring()
@@ -92,11 +100,12 @@ foreach($session in $sessions)
             $obj.ConnectionURI = $uri
             $obj.UseSSL = $UseSSL
 	        $obj.Name = $session.Name
+            $obj.RemoteComputer = $Computer
             $results += $obj
         }
       }
-      else {Write-Host "No Remote PSSessions found on $computername on port $Port." -ForegroundColor Cyan}
-    }
+      else {Write-Host "No Remote PSSessions found on $Computer on port $Port." -ForegroundColor Cyan}
+    }}
     End
     {        
       $results;
