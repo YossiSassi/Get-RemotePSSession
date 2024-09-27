@@ -12,6 +12,7 @@ Information includes:
 * ConfigurationName
 * ProcessId
 * State
+* Port
 * UseSSL (Optional. defaults to false)
 * Name (SessionName)
 * ShellID
