@@ -1,5 +1,6 @@
 function Global:Get-RemotePSSession
 {
+# v1.0.6 - added Check & notification when querying local sessions while not running elevated - needed for querying sessions on the same machine from which the script is running.
 # v1.0.5 - added Port parameter (in addition to UseSSL option/5986) + simplified .net class add-type statement
 # v1.0.4 - added support for ConfigurationName, ProcessID and session state + fixed delay bug with non-responsive computer(s)
 # v1.0.3 - added support for Computername parameter to query multiple hosts in a single command run
@@ -52,6 +53,20 @@ public string Port;
     }
     Process
     { 
+
+# If localhost specified, and shell is not elevated (run as administrator), notify and exit
+$LocalhostNames = "localhost", ".", "127.0.0.1", "::1", $ENV:COMPUTERNAME;
+
+# Check Elevated state
+$WindowsIdentity = [system.security.principal.windowsidentity]::GetCurrent();
+$Principal = New-Object System.Security.Principal.WindowsPrincipal($WindowsIdentity);
+$AdminRole = [System.Security.Principal.WindowsBuiltInRole]::Administrator;
+
+if (!$Principal.IsInRole($AdminRole) -and $LocalhostNames -contains $ComputerName)
+{
+	Write-Warning "[!] To query sessions on this host, Please launch an elevated shell and try again.";
+	Break
+}
 
 # Set port
 [int]$global:PortNumber = if ($UseSSL) {5986} else {5985}
